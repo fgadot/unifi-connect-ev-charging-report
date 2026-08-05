@@ -1,0 +1,73 @@
+{% extends "ev_app/base.html" %}
+{% block title %}Upload — EV Charge Report{% endblock %}
+
+{% block content %}
+<div class="upload-page">
+  <div class="upload-hero">
+    <div class="hero-bolt">⚡</div>
+    <h1>EV Charging<br><span class="accent">Cost Report</span></h1>
+    <p class="hero-sub">Upload your UniFi EV Station CSV export to visualize costs, browse by month, and export to Excel or PDF.</p>
+  </div>
+
+  <div class="upload-card">
+    {% if error %}
+      <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="{% url 'upload' %}" enctype="multipart/form-data" id="upload-form">
+      {% csrf_token %}
+      <div class="drop-zone" id="drop-zone">
+        <input type="file" name="csv_file" id="csv_file" accept=".csv" class="file-input">
+        <div class="drop-inner">
+          <div class="drop-icon">📂</div>
+          <p class="drop-label">Drag &amp; drop your CSV here</p>
+          <p class="drop-sub">or <label for="csv_file" class="file-link">browse files</label></p>
+          <p class="drop-hint" id="file-name">UniFi EV Station charging history export (.csv)</p>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full" id="upload-btn" disabled>
+        Analyze File →
+      </button>
+    </form>
+
+    <div class="upload-info">
+      <h3>Expected columns</h3>
+      <ul>
+        <li><code>Date (console local time)</code></li>
+        <li><code>Power Usage (kWh)</code></li>
+        <li><code>Charge Time (s)</code></li>
+        <li><code>Total Time (s)</code></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  const dropZone = document.getElementById('drop-zone');
+  const fileInput = document.getElementById('csv_file');
+  const fileName  = document.getElementById('file-name');
+  const uploadBtn = document.getElementById('upload-btn');
+
+  function setFile(file) {
+    if (!file) return;
+    fileName.textContent = file.name;
+    uploadBtn.disabled = !file.name.endsWith('.csv');
+  }
+
+  fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+      setFile(file);
+    }
+  });
+</script>
+{% endblock %}

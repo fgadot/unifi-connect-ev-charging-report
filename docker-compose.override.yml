@@ -1,0 +1,7 @@
+# Local dev override — builds the web image from the local Dockerfile
+# instead of pulling fgc92/ev-charging-report:latest from Docker Hub.
+# Delete this file (or run `docker compose -f docker-compose.yml ...`) to
+# restore the published-image behavior.
+services:
+  web:
+    build: .

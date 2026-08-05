@@ -1,0 +1,351 @@
+{% extends "ev_app/base.html" %}
+{% block title %}Dashboard — UniFi Connect EV Charge Report{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block header_actions %}
+<div class="header-actions">
+  <span class="version-badge">v{{ current_version }}</span>
+  <span class="filename-badge">📄 {{ filename }}</span>
+  <button class="btn btn-ghost btn-sm" onclick="openModal('manual-modal')">📖 Manual</button>
+  <a href="{% url 'index' %}" class="btn btn-ghost">Upload new file</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+
+  <!-- ── Update banner ── -->
+  {% if update_available %}
+  <div class="update-banner">
+    <span>⚡ Update available — version <strong>{{ latest_version }}</strong> is on Docker Hub (you have {{ current_version }})</span>
+    <button class="btn btn-update" onclick="openModal('upgrade-modal')">How to upgrade →</button>
+  </div>
+  {% endif %}
+
+  <!-- ── Controls bar ── -->
+  <div class="controls-bar">
+    <div class="controls-left">
+      <label class="control-label">Month</label>
+      <div class="segmented" id="month-tabs">
+        {% for m in months %}
+          <button class="seg-btn {% if forloop.first %}active{% endif %}" data-month="{{ m }}">{{ m }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="controls-right">
+      <label class="control-label" for="kwh-price">kWh Price ($)</label>
+      <input type="number" id="kwh-price" class="price-input"
+             value="{{ kwh_price }}" step="0.001" min="0.001" max="9.999">
+      <button class="btn btn-sm" id="apply-price">Apply</button>
+    </div>
+  </div>
+
+  <!-- ── KPI strip ── -->
+  <div class="kpi-strip">
+    <div class="kpi">
+      <span class="kpi-label">Total Cost (month)</span>
+      <span class="kpi-value" id="kpi-month-cost">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Total kWh (month)</span>
+      <span class="kpi-value" id="kpi-month-kwh">—</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Sessions (month)</span>
+      <span class="kpi-value" id="kpi-month-sessions">—</span>
+    </div>
+    <div class="kpi kpi-grand">
+      <span class="kpi-label">Grand Total Cost</span>
+      <span class="kpi-value" id="kpi-grand-cost">—</span>
+    </div>
+    <div class="kpi kpi-grand">
+      <span class="kpi-label">Grand Total kWh</span>
+      <span class="kpi-value" id="kpi-grand-kwh">—</span>
+    </div>
+  </div>
+
+  <!-- ── Charts ── -->
+  <div class="chart-grid">
+    <div class="chart-card chart-wide">
+      <h2 class="chart-title">Daily kWh Consumed <span id="chart-kwh-label"></span></h2>
+      <canvas id="chart-kwh"></canvas>
+    </div>
+    <div class="chart-card">
+      <h2 class="chart-title">Cost by Month <span class="chart-subtitle">(all time)</span></h2>
+      <canvas id="chart-monthly"></canvas>
+    </div>
+    <div class="chart-card">
+      <h2 class="chart-title">Total kWh by Month <span class="chart-subtitle">(all time)</span></h2>
+      <canvas id="chart-kwh-monthly"></canvas>
+    </div>
+  </div>
+
+  <!-- ── Day table ── -->
+  <div class="table-card">
+    <div class="table-header">
+      <h2 class="chart-title" id="table-month-label">Daily Breakdown</h2>
+      <div class="export-btns">
+        <a id="export-excel" href="#" class="btn btn-export">⬇ Excel</a>
+        <a id="export-pdf"   href="#" class="btn btn-export btn-pdf">⬇ PDF</a>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Day</th><th>Sessions</th>
+            <th>kWh</th><th>Charge Time</th><th>Total Time</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="day-tbody"></tbody>
+        <tfoot id="day-tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════ UPGRADE MODAL ═══════════════════ -->
+<div class="modal-overlay" id="upgrade-modal" onclick="closeModal('upgrade-modal')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>⚡ How to Upgrade</h2>
+      <button class="modal-close" onclick="closeModal('upgrade-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-intro">A new version of <strong>{{ docker_image }}</strong> is available on Docker Hub.
+        Upgrading takes about 30 seconds — no reinstallation needed.</p>
+      <div class="step-list">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3>Pull the latest image</h3>
+            <pre><code>docker pull {{ docker_image }}:latest</code></pre>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3>Stop and remove the current container</h3>
+            <pre><code>docker stop ev-report
+docker rm ev-report</code></pre>
+            <p class="step-note">With docker compose instead: <code>docker compose down</code></p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3>Start the updated container</h3>
+            <pre><code>docker run -d -p 8000:8000 \
+  -e DJANGO_SECRET_KEY=changeme \
+  --name ev-report \
+  {{ docker_image }}:latest</code></pre>
+            <p class="step-note">With docker compose instead: <code>docker compose up -d</code></p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <h3>Open the app</h3>
+            <p>Visit <strong>http://localhost:8000</strong> — your previous uploads are not affected.</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-tip">
+        💡 <strong>Tip:</strong> Running Watchtower alongside this container handles upgrades automatically.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ MANUAL MODAL ════════════════════ -->
+<div class="modal-overlay" id="manual-modal" onclick="closeModal('manual-modal')">
+  <div class="modal modal-wide" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>📖 User Manual</h2>
+      <button class="modal-close" onclick="closeModal('manual-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="manual-section">
+        <h3>Getting started</h3>
+        <p>Export your charging history from your <strong>UniFi EV Station</strong> console as a CSV file,
+          then upload it on the home page. The app parses it instantly and brings you to this dashboard.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Navigating months</h3>
+        <p>Use the <strong>month buttons</strong> at the top to switch between months. Only months present
+          in your data appear. The daily kWh chart and day table update when you switch.
+          The two monthly charts (cost and kWh totals) always show all-time data.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Changing the kWh price</h3>
+        <p>Type a new price in the <strong>kWh Price ($)</strong> field and press <strong>Apply</strong>
+          (or hit Enter). Every cost figure recalculates immediately. Default rate is <strong>$0.121/kWh</strong>.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Charts</h3>
+        <ul>
+          <li><strong>Daily kWh Consumed</strong> — energy used per day for the selected month</li>
+          <li><strong>Cost by Month</strong> — total cost per month across your entire history</li>
+          <li><strong>Total kWh by Month</strong> — total energy per month across your entire history</li>
+        </ul>
+        <p>Hover over any bar or point to see the exact value.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Day table</h3>
+        <p>Shows every charging day in the selected month: date, day of week, sessions, kWh,
+          charge time, total session time, daily cost, and running cumulative cost for the month.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Exporting</h3>
+        <ul>
+          <li><strong>⬇ Excel</strong> — full workbook with one sheet per month, grand summary,
+            and an editable kWh price cell (B2 on Dashboard) that recalculates everything in Excel too.</li>
+          <li><strong>⬇ PDF</strong> — formatted multi-page report, ready to print or share.</li>
+        </ul>
+        <p>Both exports use the kWh price currently set in the app.</p>
+      </div>
+      <div class="manual-section">
+        <h3>Updates</h3>
+        <p>When a new version is released, a green banner appears at the top of this page.
+          Click <strong>How to upgrade →</strong> for step-by-step Docker instructions.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const RAW = {{ data_json|safe }};
+let currentMonth = RAW.months[0];
+let currentPrice = {{ kwh_price }};
+let chartKwh, chartMonthly, chartKwhMonthly;
+
+const BLUE = '#2E75B6', TEAL = '#00B4A0', PURPLE = '#7B5EA7', ORANGE = '#D97757';
+const GRID = 'rgba(200,210,220,0.3)';
+
+function fmt$(v)   { return '$' + Number(v).toFixed(4); }
+function fmtKwh(v) { return Number(v).toFixed(3) + ' kWh'; }
+
+function recalcData(monthStr, price) {
+  const raw = RAW.month_data[monthStr];
+  const days = raw.days.map(d => ({ ...d, cost: parseFloat((d.total_kwh * price).toFixed(4)) }));
+
+  const grandCost = RAW.months.reduce((a, m) => a + RAW.month_data[m].total_kwh * price, 0);
+  const grandKwh  = RAW.months.reduce((a, m) => a + RAW.month_data[m].total_kwh, 0);
+
+  return {
+    days, labels: days.map(d => d.date_str),
+    kwh_vals: days.map(d => parseFloat(d.total_kwh.toFixed(3))),
+    total_cost: parseFloat((raw.total_kwh * price).toFixed(4)),
+    total_kwh: parseFloat(raw.total_kwh.toFixed(3)),
+    total_sessions: raw.total_sessions,
+    grand_cost: parseFloat(grandCost.toFixed(4)),
+    grand_kwh: parseFloat(grandKwh.toFixed(3)),
+    monthly_labels: RAW.months,
+    monthly_costs: RAW.months.map(m => parseFloat((RAW.month_data[m].total_kwh * price).toFixed(4))),
+    monthly_kwh: RAW.months.map(m => parseFloat(RAW.month_data[m].total_kwh.toFixed(3))),
+  };
+}
+
+const baseOpts = (yFmt, tipFmt) => ({
+  responsive: true, maintainAspectRatio: true,
+  plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => tipFmt(ctx.raw) } } },
+  scales: {
+    x: { grid: { color: GRID }, ticks: { font: { family: 'Inter', size: 11 } } },
+    y: { grid: { color: GRID }, ticks: { callback: yFmt, font: { family: 'Inter', size: 11 } } },
+  },
+});
+
+function mkBar(id, labels, data, color, yFmt, tipFmt) {
+  return new Chart(document.getElementById(id).getContext('2d'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: color + 'CC', borderColor: color, borderWidth: 1, borderRadius: 4 }] },
+    options: baseOpts(yFmt, tipFmt),
+  });
+}
+
+function initCharts(d) {
+  const $  = v => '$' + v.toFixed(2);
+  const kw = v => v.toFixed(2) + ' kWh';
+  chartKwh        = mkBar('chart-kwh',         d.labels,         d.kwh_vals,      TEAL,   kw, fmtKwh);
+  chartMonthly    = mkBar('chart-monthly',     d.monthly_labels, d.monthly_costs, ORANGE, $,  fmt$);
+  chartKwhMonthly = mkBar('chart-kwh-monthly', d.monthly_labels, d.monthly_kwh,   BLUE,   kw, fmtKwh);
+}
+
+function updateCharts(d) {
+  [[chartKwh, d.labels, d.kwh_vals], [chartMonthly, d.monthly_labels, d.monthly_costs],
+   [chartKwhMonthly, d.monthly_labels, d.monthly_kwh]]
+  .forEach(([c, l, v]) => { c.data.labels = l; c.data.datasets[0].data = v; c.update(); });
+}
+
+function updateKPIs(d) {
+  document.getElementById('kpi-month-cost').textContent     = fmt$(d.total_cost);
+  document.getElementById('kpi-month-kwh').textContent      = fmtKwh(d.total_kwh);
+  document.getElementById('kpi-month-sessions').textContent = d.total_sessions;
+  document.getElementById('kpi-grand-cost').textContent     = fmt$(d.grand_cost);
+  document.getElementById('kpi-grand-kwh').textContent      = fmtKwh(d.grand_kwh);
+}
+
+function updateTable(days, month) {
+  document.getElementById('table-month-label').textContent = `Daily Breakdown — ${month}`;
+  const tbody = document.getElementById('day-tbody');
+  tbody.innerHTML = '';
+  days.forEach((d, i) => {
+    const tr = document.createElement('tr');
+    tr.className = i % 2 === 0 ? 'row-alt' : '';
+    tr.innerHTML = `<td>${d.date_str}</td><td>${d.day_name}</td><td>${d.sessions}</td>
+      <td>${fmtKwh(d.total_kwh)}</td><td>${d.charge_hm}</td><td>${d.total_time_hm}</td>
+      <td class="num">${fmt$(d.cost)}</td>`;
+    tbody.appendChild(tr);
+  });
+  const totKwh  = days.reduce((s, d) => s + d.total_kwh, 0);
+  const totCost = days.reduce((s, d) => s + d.cost, 0);
+  document.getElementById('day-tfoot').innerHTML =
+    `<tr class="total-row"><td colspan="3">Monthly Total</td><td>${fmtKwh(totKwh)}</td>
+     <td colspan="2"></td><td class="num">${fmt$(totCost)}</td></tr>`;
+}
+
+function updateExportLinks(price) {
+  document.getElementById('export-excel').href = `/export/excel/?price=${price}`;
+  document.getElementById('export-pdf').href   = `/export/pdf/?price=${price}`;
+}
+
+function renderAll(month, price, isFirst) {
+  const d = recalcData(month, price);
+  document.getElementById('chart-kwh-label').textContent   = `— ${month}`;
+  updateKPIs(d);
+  if (isFirst) initCharts(d); else updateCharts(d);
+  updateTable(d.days, month);
+  updateExportLinks(price);
+}
+
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open')
+    .forEach(m => m.classList.remove('open'));
+});
+
+document.getElementById('month-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('.seg-btn');
+  if (!btn) return;
+  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentMonth = btn.dataset.month;
+  renderAll(currentMonth, currentPrice, false);
+});
+
+document.getElementById('apply-price').addEventListener('click', () => {
+  const val = parseFloat(document.getElementById('kwh-price').value);
+  if (!isNaN(val) && val > 0) { currentPrice = val; renderAll(currentMonth, currentPrice, false); }
+});
+document.getElementById('kwh-price').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('apply-price').click();
+});
+
+renderAll(currentMonth, currentPrice, true);
+</script>
+{% endblock %}

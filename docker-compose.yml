@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  web:
+    image: fgc92/ev-charging-report:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-changeme-in-production}
+      - DEBUG=false
+    restart: unless-stopped
+    volumes:
+      - media_data:/app/media
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  watchtower:
+    image: containrrr/watchtower:1.4.0
+    environment:
+      - DOCKER_API_VERSION=1.40
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup --label-enable
+    restart: unless-stopped
+
+volumes:
+  media_data:

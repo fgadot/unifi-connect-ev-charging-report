@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}UniFi Connect EV Charge Report{% endblock %}</title>
+  {% load static %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'ev_app/css/main.css' %}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="{% url 'index' %}" class="logo">
+        <span class="logo-bolt">⚡</span>
+        <span class="logo-text">UniFi Connect EV Charge Report</span>
+      </a>
+      {% block header_actions %}{% endblock %}
+    </div>
+  </header>
+
+  <main class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <span>UniFi Connect EV Charge Report · Open Source · github.com/fgadot/unifi-connect-ev-charging-report</span>
+  </footer>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,122 @@
+import json
+import io
+from django.shortcuts import render, redirect
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+from .parser import parse_csv, build_dashboard_data, build_excel, KWH_PRICE_DEFAULT
+
+
+def index(request):
+    """Landing / upload page."""
+    return render(request, "ev_app/index.html")
+
+
+@require_POST
+def upload(request):
+    """Handle CSV upload, store parsed data in session."""
+    f = request.FILES.get("csv_file")
+    if not f:
+        return render(request, "ev_app/index.html", {"error": "No file selected."})
+    if not f.name.lower().endswith(".csv"):
+        return render(request, "ev_app/index.html", {"error": "Please upload a .csv file."})
+
+    try:
+        grp = parse_csv(f)
+    except Exception as e:
+        return render(request, "ev_app/index.html", {"error": f"Could not parse file: {e}"})
+
+    # Store the aggregated data in session as JSON (small enough)
+    request.session["ev_data"] = grp.to_json(orient="records", date_format="iso")
+    request.session["filename"] = f.name
+    return redirect("dashboard")
+
+
+def dashboard(request):
+    """Main dashboard view."""
+    ev_json = request.session.get("ev_data")
+    if not ev_json:
+        return redirect("index")
+
+    grp      = _load_grp(ev_json)
+    kwh_price = float(request.GET.get("price", KWH_PRICE_DEFAULT))
+    data     = build_dashboard_data(grp, kwh_price)
+    filename = request.session.get("filename", "")
+
+    return render(request, "ev_app/dashboard.html", {
+        "data_json":  json.dumps(data),
+        "kwh_price":  kwh_price,
+        "filename":   filename,
+        "months":     data["months"],
+        "grand_kwh":  data["grand_kwh"],
+        "grand_cost": data["grand_cost"],
+        "grand_sessions": data["grand_sessions"],
+    })
+
+
+def api_data(request):
+    """JSON API — returns dashboard data at a given kWh price."""
+    ev_json = request.session.get("ev_data")
+    if not ev_json:
+        return JsonResponse({"error": "No data loaded"}, status=400)
+    kwh_price = float(request.GET.get("price", KWH_PRICE_DEFAULT))
+    grp  = _load_grp(ev_json)
+    data = build_dashboard_data(grp, kwh_price)
+    return JsonResponse(data)
+
+
+def export_excel(request):
+    """Stream an Excel file download."""
+    ev_json = request.session.get("ev_data")
+    if not ev_json:
+        return redirect("index")
+    kwh_price = float(request.GET.get("price", KWH_PRICE_DEFAULT))
+    grp  = _load_grp(ev_json)
+    xlsx = build_excel(grp, kwh_price)
+    filename = request.session.get("filename", "charging").replace(".csv", "")
+    resp = HttpResponse(
+        xlsx,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    resp["Content-Disposition"] = f'attachment; filename="{filename}_cost_report.xlsx"'
+    return resp
+
+
+def export_pdf(request):
+    """Generate and stream a PDF report."""
+    ev_json = request.session.get("ev_data")
+    if not ev_json:
+        return redirect("index")
+    kwh_price = float(request.GET.get("price", KWH_PRICE_DEFAULT))
+    grp  = _load_grp(ev_json)
+    data = build_dashboard_data(grp, kwh_price)
+
+    html_content = render(request, "ev_app/pdf_report.html", {
+        "data":      data,
+        "kwh_price": kwh_price,
+        "filename":  request.session.get("filename", ""),
+    }).content.decode("utf-8")
+
+    from weasyprint import HTML
+    pdf_bytes = HTML(string=html_content, base_url=request.build_absolute_uri("/")).write_pdf()
+    filename = request.session.get("filename", "charging").replace(".csv", "")
+    resp = HttpResponse(pdf_bytes, content_type="application/pdf")
+    resp["Content-Disposition"] = f'attachment; filename="{filename}_cost_report.pdf"'
+    return resp
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+import pandas as pd
+
+def _load_grp(ev_json):
+    grp = pd.read_json(io.StringIO(ev_json), orient="records")
+    grp["_date"]     = pd.to_datetime(grp["_date"]).dt.date
+    grp["month"]     = pd.to_datetime(grp["_date"]).dt.to_period("M")
+    grp["month_str"] = grp["month"].astype(str)
+    grp["date_str"]  = grp["_date"].astype(str)
+    grp["charge_hm"] = grp["total_charge_s"].apply(
+        lambda s: f"{int(s)//3600}h {(int(s)%3600)//60}m")
+    grp["total_time_hm"] = grp["total_time_s"].apply(
+        lambda s: f"{int(s)//3600}h {(int(s)%3600)//60}m")
+    grp["day_name"]  = pd.to_datetime(grp["date_str"]).dt.strftime("%A")
+    return grp
