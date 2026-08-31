@@ -3,4 +3,4 @@ whitenoise==6.8.2
 gunicorn==26.1.0
 pandas==2.2.3
 openpyxl==3.1.5
-weasyprint==65.0
+weasyprint==68.0
