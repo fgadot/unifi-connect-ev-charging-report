@@ -44,7 +44,11 @@ def _load_grp(request):
     file_key = request.session.get("csv_key")
     if not file_key:
         return None
-    cache_path = os.path.join(UPLOAD_CACHE, file_key)
+    # Sanitize: only allow UUID-format filenames to prevent path traversal
+    import re
+    if not re.match(r'^[0-9a-f\-]{36}\.csv$', file_key):
+        return None
+    cache_path = os.path.join(UPLOAD_CACHE, os.path.basename(file_key))
     if not os.path.exists(cache_path):
         return None
     with open(cache_path, "rb") as fh:

@@ -27,11 +27,14 @@
   <!-- ── Controls bar ── -->
   <div class="controls-bar">
     <div class="controls-left">
-      <label class="control-label">Month</label>
-      <div class="segmented" id="month-tabs">
-        {% for m in months %}
-          <button class="seg-btn {% if forloop.first %}active{% endif %}" data-month="{{ m }}">{{ m }}</button>
-        {% endfor %}
+      <div class="month-picker">
+        <label class="control-label" for="preset-select">Month</label>
+        <select id="preset-select" class="month-select"></select>
+        <div class="month-checklist" id="month-checklist">
+          {% for m in months %}
+            <label class="month-item"><input type="checkbox" value="{{ m }}"><span>{{ m }}</span></label>
+          {% endfor %}
+        </div>
       </div>
     </div>
     <div class="controls-right">
@@ -45,15 +48,15 @@
   <!-- ── KPI strip ── -->
   <div class="kpi-strip">
     <div class="kpi">
-      <span class="kpi-label">Total Cost (month)</span>
+      <span class="kpi-label">Total Cost (selected)</span>
       <span class="kpi-value" id="kpi-month-cost">—</span>
     </div>
     <div class="kpi">
-      <span class="kpi-label">Total kWh (month)</span>
+      <span class="kpi-label">Total kWh (selected)</span>
       <span class="kpi-value" id="kpi-month-kwh">—</span>
     </div>
     <div class="kpi">
-      <span class="kpi-label">Sessions (month)</span>
+      <span class="kpi-label">Sessions (selected)</span>
       <span class="kpi-value" id="kpi-month-sessions">—</span>
     </div>
     <div class="kpi kpi-grand">
@@ -69,6 +72,10 @@
   <!-- ── Charts ── -->
   <div class="chart-grid">
     <div class="chart-card chart-wide">
+      <h2 class="chart-title">Daily Cost <span id="chart-cost-label"></span></h2>
+      <canvas id="chart-cost"></canvas>
+    </div>
+    <div class="chart-card chart-wide">
       <h2 class="chart-title">Daily kWh Consumed <span id="chart-kwh-label"></span></h2>
       <canvas id="chart-kwh"></canvas>
     </div>
@@ -79,6 +86,10 @@
     <div class="chart-card">
       <h2 class="chart-title">Total kWh by Month <span class="chart-subtitle">(all time)</span></h2>
       <canvas id="chart-kwh-monthly"></canvas>
+    </div>
+    <div class="chart-card chart-wide">
+      <h2 class="chart-title">Average Cost by Day of Week <span class="chart-subtitle">(all time)</span></h2>
+      <canvas id="chart-dow"></canvas>
     </div>
   </div>
 
@@ -175,10 +186,14 @@ docker rm ev-report</code></pre>
           then upload it on the home page. The app parses it instantly and brings you to this dashboard.</p>
       </div>
       <div class="manual-section">
-        <h3>Navigating months</h3>
-        <p>Use the <strong>month buttons</strong> at the top to switch between months. Only months present
-          in your data appear. The daily kWh chart and day table update when you switch.
-          The two monthly charts (cost and kWh totals) always show all-time data.</p>
+        <h3>Selecting months</h3>
+        <p>Pick a range from the <strong>preset dropdown</strong> (This Month, Last 3 Months, This Year,
+          All Time…) — only presets your data actually covers are listed. Or tick any combination of
+          months in the <strong>checklist</strong> below it; doing so switches the dropdown to
+          <strong>Custom</strong>. Only months present in your data appear.</p>
+        <p>The daily cost chart, daily kWh chart, day table and the KPI cards aggregate every day
+          across the selected months in date order. The day-of-week average and the two monthly
+          charts (cost and kWh totals) always show all-time data.</p>
       </div>
       <div class="manual-section">
         <h3>Changing the kWh price</h3>
@@ -188,15 +203,17 @@ docker rm ev-report</code></pre>
       <div class="manual-section">
         <h3>Charts</h3>
         <ul>
-          <li><strong>Daily kWh Consumed</strong> — energy used per day for the selected month</li>
+          <li><strong>Daily Cost</strong> — cost per day across the selected months</li>
+          <li><strong>Daily kWh Consumed</strong> — energy used per day across the selected months</li>
           <li><strong>Cost by Month</strong> — total cost per month across your entire history</li>
           <li><strong>Total kWh by Month</strong> — total energy per month across your entire history</li>
+          <li><strong>Average Cost by Day of Week</strong> — average daily cost per weekday, all time</li>
         </ul>
         <p>Hover over any bar or point to see the exact value.</p>
       </div>
       <div class="manual-section">
         <h3>Day table</h3>
-        <p>Shows every charging day in the selected month: date, day of week, sessions, kWh,
+        <p>Shows every charging day in the selected months: date, day of week, sessions, kWh,
           charge time, total session time, daily cost, and running cumulative cost for the month.</p>
       </div>
       <div class="manual-section">
@@ -219,9 +236,12 @@ docker rm ev-report</code></pre>
 
 <script>
 const RAW = {{ data_json|safe }};
-let currentMonth = RAW.months[0];
+const ALL_MONTHS = RAW.months;                                   // ascending, e.g. ['2026-01', '2026-02']
+const ALL_DAYS   = ALL_MONTHS.flatMap(m => RAW.month_data[m].days);
+const DOW_ORDER  = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
 let currentPrice = {{ kwh_price }};
-let chartKwh, chartMonthly, chartKwhMonthly;
+let chartCost, chartKwh, chartMonthly, chartKwhMonthly, chartDow;
 
 const BLUE = '#2E75B6', TEAL = '#00B4A0', PURPLE = '#7B5EA7', ORANGE = '#D97757';
 const GRID = 'rgba(200,210,220,0.3)';
@@ -229,24 +249,67 @@ const GRID = 'rgba(200,210,220,0.3)';
 function fmt$(v)   { return '$' + Number(v).toFixed(4); }
 function fmtKwh(v) { return Number(v).toFixed(3) + ' kWh'; }
 
-function recalcData(monthStr, price) {
-  const raw = RAW.month_data[monthStr];
-  const days = raw.days.map(d => ({ ...d, cost: parseFloat((d.total_kwh * price).toFixed(4)) }));
+/* ── Month presets ───────────────────────────────────────────────────────── */
+function ym(year, monthIdx) {                                    // monthIdx may under/overflow
+  const d = new Date(year, monthIdx, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
 
-  const grandCost = RAW.months.reduce((a, m) => a + RAW.month_data[m].total_kwh * price, 0);
-  const grandKwh  = RAW.months.reduce((a, m) => a + RAW.month_data[m].total_kwh, 0);
+const NOW = new Date(), CUR_Y = NOW.getFullYear(), CUR_M = NOW.getMonth();
+
+function lastNMonths(n) {
+  const window = [];
+  for (let i = 0; i < n; i++) window.push(ym(CUR_Y, CUR_M - i));
+  return ALL_MONTHS.filter(m => window.includes(m));
+}
+
+// Only presets that actually resolve to months present in the data are offered.
+const PRESETS = [
+  { key: 'this-month', label: 'This Month',    months: lastNMonths(1) },
+  { key: 'last-month', label: 'Last Month',    months: ALL_MONTHS.filter(m => m === ym(CUR_Y, CUR_M - 1)) },
+  { key: 'last-3',     label: 'Last 3 Months', months: lastNMonths(3) },
+  { key: 'last-6',     label: 'Last 6 Months', months: lastNMonths(6) },
+  { key: 'this-year',  label: 'This Year',     months: ALL_MONTHS.filter(m => +m.slice(0, 4) === CUR_Y) },
+  { key: 'last-year',  label: 'Last Year',     months: ALL_MONTHS.filter(m => +m.slice(0, 4) === CUR_Y - 1) },
+  { key: 'all-time',   label: 'All Time',      months: ALL_MONTHS.slice() },
+].filter(p => p.months.length > 0);
+
+/* ── Data aggregation over the selected months ───────────────────────────── */
+function dowAverages(price) {
+  const sums = {}, counts = {};
+  ALL_DAYS.forEach(d => {
+    sums[d.day_name]   = (sums[d.day_name]   || 0) + d.total_kwh * price;
+    counts[d.day_name] = (counts[d.day_name] || 0) + 1;
+  });
+  const labels = DOW_ORDER.filter(d => counts[d]);
+  return { labels, values: labels.map(d => parseFloat((sums[d] / counts[d]).toFixed(4))) };
+}
+
+function recalcData(months, price) {
+  const sel  = ALL_MONTHS.filter(m => months.includes(m));       // chronological order
+  const days = sel.flatMap(m => RAW.month_data[m].days)
+                  .map(d => ({ ...d, cost: parseFloat((d.total_kwh * price).toFixed(4)) }))
+                  .sort((a, b) => a.date_str.localeCompare(b.date_str));
+
+  const selKwh      = sel.reduce((a, m) => a + RAW.month_data[m].total_kwh, 0);
+  const selSessions = sel.reduce((a, m) => a + RAW.month_data[m].total_sessions, 0);
+  const grandKwh    = ALL_MONTHS.reduce((a, m) => a + RAW.month_data[m].total_kwh, 0);
+  const dow         = dowAverages(price);
 
   return {
     days, labels: days.map(d => d.date_str),
+    cost_vals: days.map(d => d.cost),
     kwh_vals: days.map(d => parseFloat(d.total_kwh.toFixed(3))),
-    total_cost: parseFloat((raw.total_kwh * price).toFixed(4)),
-    total_kwh: parseFloat(raw.total_kwh.toFixed(3)),
-    total_sessions: raw.total_sessions,
-    grand_cost: parseFloat(grandCost.toFixed(4)),
+    total_cost: parseFloat((selKwh * price).toFixed(4)),
+    total_kwh: parseFloat(selKwh.toFixed(3)),
+    total_sessions: selSessions,
+    grand_cost: parseFloat((grandKwh * price).toFixed(4)),
     grand_kwh: parseFloat(grandKwh.toFixed(3)),
-    monthly_labels: RAW.months,
-    monthly_costs: RAW.months.map(m => parseFloat((RAW.month_data[m].total_kwh * price).toFixed(4))),
-    monthly_kwh: RAW.months.map(m => parseFloat(RAW.month_data[m].total_kwh.toFixed(3))),
+    monthly_labels: ALL_MONTHS,
+    monthly_costs: ALL_MONTHS.map(m => parseFloat((RAW.month_data[m].total_kwh * price).toFixed(4))),
+    monthly_kwh: ALL_MONTHS.map(m => parseFloat(RAW.month_data[m].total_kwh.toFixed(3))),
+    dow_labels: dow.labels,
+    dow_values: dow.values,
   };
 }
 
@@ -270,14 +333,18 @@ function mkBar(id, labels, data, color, yFmt, tipFmt) {
 function initCharts(d) {
   const $  = v => '$' + v.toFixed(2);
   const kw = v => v.toFixed(2) + ' kWh';
+  chartCost       = mkBar('chart-cost',        d.labels,         d.cost_vals,     PURPLE, $,  fmt$);
   chartKwh        = mkBar('chart-kwh',         d.labels,         d.kwh_vals,      TEAL,   kw, fmtKwh);
   chartMonthly    = mkBar('chart-monthly',     d.monthly_labels, d.monthly_costs, ORANGE, $,  fmt$);
   chartKwhMonthly = mkBar('chart-kwh-monthly', d.monthly_labels, d.monthly_kwh,   BLUE,   kw, fmtKwh);
+  chartDow        = mkBar('chart-dow',         d.dow_labels,     d.dow_values,    BLUE,   $,  fmt$);
 }
 
 function updateCharts(d) {
-  [[chartKwh, d.labels, d.kwh_vals], [chartMonthly, d.monthly_labels, d.monthly_costs],
-   [chartKwhMonthly, d.monthly_labels, d.monthly_kwh]]
+  [[chartCost, d.labels, d.cost_vals], [chartKwh, d.labels, d.kwh_vals],
+   [chartMonthly, d.monthly_labels, d.monthly_costs],
+   [chartKwhMonthly, d.monthly_labels, d.monthly_kwh],
+   [chartDow, d.dow_labels, d.dow_values]]
   .forEach(([c, l, v]) => { c.data.labels = l; c.data.datasets[0].data = v; c.update(); });
 }
 
@@ -289,23 +356,56 @@ function updateKPIs(d) {
   document.getElementById('kpi-grand-kwh').textContent      = fmtKwh(d.grand_kwh);
 }
 
-function updateTable(days, month) {
-  document.getElementById('table-month-label').textContent = `Daily Breakdown — ${month}`;
+function updateTable(days, label) {
+  document.getElementById('table-month-label').textContent = `Daily Breakdown — ${label}`;
   const tbody = document.getElementById('day-tbody');
   tbody.innerHTML = '';
+
   days.forEach((d, i) => {
     const tr = document.createElement('tr');
-    tr.className = i % 2 === 0 ? 'row-alt' : '';
-    tr.innerHTML = `<td>${d.date_str}</td><td>${d.day_name}</td><td>${d.sessions}</td>
-      <td>${fmtKwh(d.total_kwh)}</td><td>${d.charge_hm}</td><td>${d.total_time_hm}</td>
-      <td class="num">${fmt$(d.cost)}</td>`;
+    if (i % 2 === 0) tr.className = 'row-alt';
+
+    const cells = [
+      d.date_str,
+      d.day_name,
+      d.sessions,
+      fmtKwh(d.total_kwh),
+      d.charge_hm,
+      d.total_time_hm,
+      fmt$(d.cost),
+    ];
+
+    cells.forEach((val, idx) => {
+      const td = document.createElement('td');
+      if (idx === 6) td.className = 'num';
+      td.textContent = val;
+      tr.appendChild(td);
+    });
+
     tbody.appendChild(tr);
   });
+
   const totKwh  = days.reduce((s, d) => s + d.total_kwh, 0);
   const totCost = days.reduce((s, d) => s + d.cost, 0);
-  document.getElementById('day-tfoot').innerHTML =
-    `<tr class="total-row"><td colspan="3">Monthly Total</td><td>${fmtKwh(totKwh)}</td>
-     <td colspan="2"></td><td class="num">${fmt$(totCost)}</td></tr>`;
+
+  const tfoot = document.getElementById('day-tfoot');
+  tfoot.innerHTML = '';
+  const tr = document.createElement('tr');
+  tr.className = 'total-row';
+  const totals = [
+    { text: 'Selected Total', colspan: 3 },
+    { text: fmtKwh(totKwh) },
+    { text: '', colspan: 2 },
+    { text: fmt$(totCost), cls: 'num' },
+  ];
+  totals.forEach(({ text, colspan, cls }) => {
+    const td = document.createElement('td');
+    if (colspan) td.colSpan = colspan;
+    if (cls) td.className = cls;
+    td.textContent = text;
+    tr.appendChild(td);
+  });
+  tfoot.appendChild(tr);
 }
 
 function updateExportLinks(price) {
@@ -313,12 +413,20 @@ function updateExportLinks(price) {
   document.getElementById('export-pdf').href   = `/export/pdf/?price=${price}`;
 }
 
-function renderAll(month, price, isFirst) {
-  const d = recalcData(month, price);
-  document.getElementById('chart-kwh-label').textContent   = `— ${month}`;
+function selectionLabel(months) {
+  if (!months.length)      return 'no months selected';
+  if (months.length <= 3)  return months.join(', ');
+  return `${months[0]} – ${months[months.length - 1]} (${months.length} months)`;
+}
+
+function renderAll(months, price, isFirst) {
+  const d     = recalcData(months, price);
+  const label = selectionLabel(ALL_MONTHS.filter(m => months.includes(m)));
+  document.getElementById('chart-cost-label').textContent = `— ${label}`;
+  document.getElementById('chart-kwh-label').textContent  = `— ${label}`;
   updateKPIs(d);
   if (isFirst) initCharts(d); else updateCharts(d);
-  updateTable(d.days, month);
+  updateTable(d.days, label);
   updateExportLinks(price);
 }
 
@@ -329,23 +437,46 @@ document.addEventListener('keydown', e => {
     .forEach(m => m.classList.remove('open'));
 });
 
-document.getElementById('month-tabs').addEventListener('click', e => {
-  const btn = e.target.closest('.seg-btn');
-  if (!btn) return;
-  document.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  currentMonth = btn.dataset.month;
-  renderAll(currentMonth, currentPrice, false);
+/* ── Month selection controls ────────────────────────────────────────────── */
+const presetEl    = document.getElementById('preset-select');
+const checklistEl = document.getElementById('month-checklist');
+
+PRESETS.forEach(p => presetEl.add(new Option(p.label, p.key)));
+presetEl.add(new Option('Custom', 'custom'));
+
+function getSelectedMonths() {
+  const checked = new Set([...checklistEl.querySelectorAll('input:checked')].map(cb => cb.value));
+  return ALL_MONTHS.filter(m => checked.has(m));
+}
+
+function setSelectedMonths(months) {
+  checklistEl.querySelectorAll('input').forEach(cb => { cb.checked = months.includes(cb.value); });
+}
+
+presetEl.addEventListener('change', () => {
+  const preset = PRESETS.find(p => p.key === presetEl.value);
+  if (!preset) return;                                   // 'Custom' keeps the current checkboxes
+  setSelectedMonths(preset.months);
+  renderAll(preset.months, currentPrice, false);
+});
+
+checklistEl.addEventListener('change', () => {
+  presetEl.value = 'custom';
+  renderAll(getSelectedMonths(), currentPrice, false);
 });
 
 document.getElementById('apply-price').addEventListener('click', () => {
   const val = parseFloat(document.getElementById('kwh-price').value);
-  if (!isNaN(val) && val > 0) { currentPrice = val; renderAll(currentMonth, currentPrice, false); }
+  if (!isNaN(val) && val > 0) { currentPrice = val; renderAll(getSelectedMonths(), currentPrice, false); }
 });
 document.getElementById('kwh-price').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('apply-price').click();
 });
 
-renderAll(currentMonth, currentPrice, true);
+// Default: "This Month" when the data covers it, otherwise the most recent month.
+const initialPreset = PRESETS.find(p => p.key === 'this-month');
+presetEl.value = initialPreset ? initialPreset.key : 'custom';
+setSelectedMonths(initialPreset ? initialPreset.months : ALL_MONTHS.slice(-1));
+renderAll(getSelectedMonths(), currentPrice, true);
 </script>
 {% endblock %}

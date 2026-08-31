@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(docker compose *)"
+      "Bash(docker compose *)",
+      "Bash(docker exec unifi-connect-ev-charging-report-web-1 *)",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(curl -sf -o /dev/null http://localhost:8001/)",
+      "Bash(python3 -c \"import django, pandas; print\\(django.__version__, pandas.__version__\\)\")"
     ]
   }
 }

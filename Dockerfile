@@ -1,4 +1,4 @@
-# ── Stage 1: build static assets ────────────────────────────────────────────
+# ── Stage 1: build ───────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
@@ -19,7 +19,7 @@ RUN DJANGO_SETTINGS_MODULE=ev_project.settings \
     DJANGO_SECRET_KEY=build-time-key \
     python manage.py collectstatic --noinput
 
-# ── Stage 2: lean runtime image ──────────────────────────────────────────────
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -35,8 +35,12 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/gunicorn
 COPY --from=builder /app /app
 
-# Create directories needed at runtime
-RUN mkdir -p /tmp/django_sessions /app/media/csv_cache
+# Create runtime directories and non-root user
+RUN mkdir -p /tmp/django_sessions /app/media/csv_cache && \
+    groupadd -r evapp && useradd -r -g evapp evapp && \
+    chown -R evapp:evapp /app /tmp/django_sessions
+
+USER evapp
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
